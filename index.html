@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>工作任务看板</title>
+<script src="./config.public.js"></script>
 <script src="./config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -675,33 +676,25 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;backgr
 <script type="text/babel">
 const {useState,useEffect,useRef}=React;
 const CFG=window.QD_CONFIG||{};
-const OPENAI_API_KEY=CFG.OPENAI_API_KEY||'';
+const API_BASE_URL=(CFG.API_BASE_URL||'').replace(/\/$/,'');
 const OPENAI_MODEL='gpt-4.1-mini';
 async function openAIText(system,user,maxTokens=500){
-  if(!OPENAI_API_KEY) throw new Error('请在 config.js 中配置 OPENAI_API_KEY');
-  const res=await fetch('https://api.openai.com/v1/chat/completions',{
+  if(!API_BASE_URL) throw new Error('请在 config.public.js 中配置 API_BASE_URL');
+  const res=await fetch(API_BASE_URL+'/api/openai/chat',{
     method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':'Bearer '+OPENAI_API_KEY},
-    body:JSON.stringify({
-      model:OPENAI_MODEL,
-      temperature:0,
-      max_tokens:maxTokens,
-      messages:[
-        {role:'system',content:system},
-        {role:'user',content:user}
-      ]
-    })
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model:OPENAI_MODEL,system,user,maxTokens})
   });
   const d=await res.json();
-  if(!res.ok) throw new Error(d.error?.message||'OpenAI调用失败');
-  return (d.choices?.[0]?.message?.content||'').trim();
+  if(!res.ok) throw new Error(d.error||d.error?.message||'OpenAI调用失败');
+  return (d.text||'').trim();
 }
 function getPT(name){const m=(window.__ptMap||{})[name];return m!=null?m:0;}
 
 /* ===== Supabase ===== */
 const SURL=CFG.SUPABASE_URL||'';
 const SKEY=CFG.SUPABASE_ANON_KEY||'';
-const SB=supabase.createClient(SURL,SKEY);
+const HAS_SUPABASE=!!(SURL&&SKEY&&window.supabase);
 const PROJECTS=['w','理享招生项目'];
 const PROJECT_MEMBERS={
   'w':[],
@@ -724,6 +717,49 @@ const DEMO=[
   {id:3,name:'后端API性能优化',assignee:'王五',deadline:'2026-04-05',priority:'high',status:'blocked',blocker:'等待DBA团队提供数据库优化方案，预计明天到位',files:[],notes:'接口响应时间需从2s降至500ms',createdAt:'2026-03-22'},
   {id:4,name:'新员工培训材料整理',assignee:'赵六',deadline:'2026-04-10',priority:'low',status:'pending',blocker:'',files:[],notes:'包含公司文化、流程规范、工具使用说明',createdAt:'2026-03-24'},
 ];
+
+function makeLocalDb(){
+  const key='lw_local_db_v1';
+  const seed={tasks:DEMO.map(taskToDb),boss_tasks:[],finance_records:[],org_members:[]};
+  const read=()=>{try{return JSON.parse(localStorage.getItem(key))||seed;}catch(e){return seed;}};
+  const write=db=>{try{localStorage.setItem(key,JSON.stringify(db));}catch(e){}};
+  const clone=v=>JSON.parse(JSON.stringify(v));
+  class LocalQuery{
+    constructor(table){this.table=table;this.action='select';this.payload=null;this.filters=[];this.sort=null;this.max=null;}
+    select(){return this;}
+    insert(rows){this.action='insert';this.payload=Array.isArray(rows)?rows:[rows];return this;}
+    update(row){this.action='update';this.payload=row;return this;}
+    upsert(row){this.action='upsert';this.payload=Array.isArray(row)?row:[row];return this;}
+    delete(){this.action='delete';return this;}
+    eq(k,v){this.filters.push({op:'eq',k,v});return this;}
+    gt(k,v){this.filters.push({op:'gt',k,v});return this;}
+    order(k,opt={}){this.sort={k,asc:opt.ascending!==false};return this;}
+    limit(n){this.max=n;return this;}
+    then(resolve,reject){return this.exec().then(resolve,reject);}
+    async exec(){
+      const db=read();db[this.table]=db[this.table]||[];
+      const match=r=>this.filters.every(f=>f.op==='eq'?r[f.k]===f.v:Number(r[f.k])>Number(f.v));
+      let rows=db[this.table],data=[];
+      if(this.action==='insert'){
+        data=this.payload.map(row=>({...row,id:row.id||Date.now()+Math.floor(Math.random()*100000)}));
+        rows.push(...data);
+      }else if(this.action==='update'){
+        rows=rows.map(r=>match(r)?{...r,...this.payload}:r);db[this.table]=rows;data=rows.filter(match);
+      }else if(this.action==='upsert'){
+        this.payload.forEach(row=>{const i=rows.findIndex(r=>r.id===row.id);if(i>=0)rows[i]={...rows[i],...row};else rows.push({...row,id:row.id||Date.now()+Math.floor(Math.random()*100000)});});
+        data=this.payload;
+      }else if(this.action==='delete'){
+        data=rows.filter(match);db[this.table]=rows.filter(r=>!match(r));
+      }else data=rows.filter(match);
+      if(this.sort)data=data.slice().sort((a,b)=>{const av=a[this.sort.k],bv=b[this.sort.k];if(av===bv)return 0;return (av>bv?1:-1)*(this.sort.asc?1:-1);});
+      if(this.max!=null)data=data.slice(0,this.max);
+      write(db);return {data:clone(data),error:null};
+    }
+  }
+  return {from:table=>new LocalQuery(table)};
+}
+const SB=HAS_SUPABASE?supabase.createClient(SURL,SKEY):makeLocalDb();
+if(!HAS_SUPABASE) console.warn('未配置 Supabase，当前使用浏览器本地演示数据。');
 
 const S={
   'pending':     {label:'未开始',cls:'b-pending',    emoji:'⏳'},
@@ -1389,10 +1425,9 @@ function VoiceFloat({tasks}){
   };
 
   // ── 组件级常量（供 speak / confirmProject 复用）──
-  const VC_QBOT=CFG.TELEGRAM_BOT_TOKEN||'';
-  const VC_BOSS=CFG.BOSS_CHAT_ID||'';
+  const VC_BOSS=CFG.BOSS_CHAT_ID||'boss';
   const VC_MEMBERS=CFG.MEMBER_CHAT_IDS||{};
-  const qSend=(chatId,text)=>fetch(`https://api.telegram.org/bot${VC_QBOT}/sendMessage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text,parse_mode:'Markdown'})});
+  const qSend=(chatId,text)=>fetch(API_BASE_URL+'/api/telegram/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text,parse_mode:'Markdown'})});
 
   const onErr=()=>{stopBars();setPhase('idle');setStatus('出错，请重试');setTimeout(()=>setStatus('点击说话 · 可下达任务'),3000);};
   const speechApi=()=>window.SpeechRecognition||window.webkitSpeechRecognition||null;
@@ -1659,7 +1694,7 @@ function VoiceFloat({tasks}){
     setPendingTask(null);
     const assignee=normalizeAssignee(task.assignee,null)||task.assignee||'';
     task.assignee=assignee;
-    const memberChatId=VC_MEMBERS[assignee];
+    const memberChatId=VC_MEMBERS[assignee]||assignee;
     const pl={high:'🔴 高',mid:'🟡 中',low:'🟢 低'}[task.priority||'mid'];
     const dlStr=task.deadline?new Date(task.deadline).toLocaleDateString('zh-CN'):'待定';
     const projLabel=proj==='其他'?'其他项目':proj;
@@ -1708,7 +1743,7 @@ function VoiceFloat({tasks}){
     const isRecruit=RECRUIT_KW.some(kw=>(task.title||'').includes(kw)||(task.description||'').includes(kw));
     if(isRecruit&&assignee==='韩笑'){
       const coworker='吴晓磊';
-      const coId=VC_MEMBERS[coworker];
+      const coId=VC_MEMBERS[coworker]||coworker;
       const coRow={id:Date.now()+1,name:task.title||'',assignee:coworker,deadline:task.deadline||null,priority:task.priority||'mid',status:'in-progress',blocker:deliverable||'',files:[],notes:'协同韩笑：\n'+sheetLines,project:proj==='其他'?null:proj,created_at:(task.deadline||new Date().toISOString().split('T')[0])};
       SB.from('tasks').insert([coRow]).select().then(function(res){
         var ins=res.data;
