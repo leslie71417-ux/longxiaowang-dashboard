@@ -1,6 +1,6 @@
 window.QD_CONFIG = {
   API_BASE_URL: window.location.hostname.endsWith('github.io')
-    ? 'https://YOUR_RENDER_SERVICE.onrender.com'
+    ? 'https://longxiaowang-dashboard.onrender.com'
     : window.location.origin,
   SUPABASE_URL: '',
   SUPABASE_ANON_KEY: '',
