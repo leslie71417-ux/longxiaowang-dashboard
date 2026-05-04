@@ -812,13 +812,11 @@ function taskSheetSummary(notes){
     const line=text.split('\n').find(x=>x.startsWith(label+'：'));
     return line?line.slice(label.length+1).trim():'';
   };
-  const pri=priorityMeta(get('重要程度')||'中');
   const lvl=levelMeta(get('项目')||'一般');
   return [
     '交付：'+(get('交付结果')||'待定'),
     '时间：'+(get('交付时间')||'待定'),
-    '重要：'+pri.emoji+pri.label,
-    '级别：'+lvl.emoji+lvl.label
+    '紧急：'+lvl.emoji+lvl.label
   ].join(' · ');
 }
 
@@ -2736,7 +2734,6 @@ function TaskSheetPage({bossTasks=[],onBack}){
   const done=sheets.filter(s=>['completed','reported'].includes(s.rawStatus)).length;
   const blocked=sheets.filter(s=>s.rawStatus==='blocked').length;
   const high=sheets.filter(s=>/高|high|紧急|很紧急/.test((s.priority||'')+' '+(s.project||''))).length;
-  const urgencyCls=s=>priorityMeta(s.priority).cls;
   const doneCls=s=>s.rawStatus==='blocked'?'done-blocked':['completed','reported'].includes(s.rawStatus)?'done-completed':['sent','pending'].includes(s.rawStatus)?'done-pending':'done-active';
   return(
     <div className="sheet-page">
@@ -2781,8 +2778,7 @@ function TaskSheetPage({bossTasks=[],onBack}){
                       <div className="excel-deliverable">{s.deliverable}</div>
                     </td>
                     <td>
-                      <span className={'urgency-badge '+urgencyCls(s)}>{priorityMeta(s.priority).emoji} {priorityMeta(s.priority).label}</span>
-                      <span className={'level-badge '+levelMeta(s.project).cls} style={{marginLeft:5}}>{levelMeta(s.project).emoji} {levelMeta(s.project).label}</span>
+                      <span className={'level-badge '+levelMeta(s.project).cls}>{levelMeta(s.project).emoji} {levelMeta(s.project).label}</span>
                     </td>
                     <td><span className={'done-badge '+doneCls(s)}>{s.status}</span></td>
                     <td>{s.project}</td>
@@ -2851,9 +2847,8 @@ function HomePage({tasks,bossTasks=[],onNav}){
                 <div className="sheet-k">负责人</div><div className="sheet-v">{latestSheet.assignee}</div>
                 <div className="sheet-k">交付</div><div className="sheet-v">{latestSheet.deadline}</div>
                 <div className="sheet-k">结果</div><div className="sheet-v">{latestSheet.deliverable}</div>
-                <div className="sheet-k">重要</div>
+                <div className="sheet-k">紧急</div>
                 <div className="sheet-v sheet-v-chips">
-                  <span className={'urgency-badge '+priorityMeta(latestSheet.priority).cls}>{priorityMeta(latestSheet.priority).emoji} {priorityMeta(latestSheet.priority).label}</span>
                   <span className={'level-badge '+levelMeta(latestSheet.project).cls}>{levelMeta(latestSheet.project).emoji} {levelMeta(latestSheet.project).label}</span>
                 </div>
               </div>
