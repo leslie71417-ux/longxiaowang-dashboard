@@ -728,6 +728,7 @@ const PROJECT_MEMBERS={
   ],
 };
 const ALL_MEMBERS=['韩笑','吴晓磊','陈冬梅','张娜娜','张慧'];
+const LEADERBOARD_MEMBERS=['韩笑','陈冬梅','张娜娜','刘菲','徐媛'];
 function taskToDb(t){return{id:t.id,name:t.name,assignee:t.assignee||'',deadline:t.deadline||null,priority:t.priority||'mid',status:t.status||'pending',blocker:t.blocker||'',files:t.files||[],notes:t.notes||'',project:t.project||null,created_at:t.createdAt||new Date().toISOString().split('T')[0]};}
 function dbToTask(d){return{id:d.id,name:d.name,assignee:d.assignee||'',deadline:d.deadline||'',priority:d.priority||'mid',status:d.status||'pending',blocker:d.blocker||'',files:d.files||[],notes:d.notes||'',project:d.project||'',createdAt:d.created_at||''};}
 
@@ -3130,7 +3131,7 @@ function LeaderboardPage({onBack}){
 
   const rankIcon=(i)=>i===0?'👑':i===1?'🥈':i===2?'🥉':`#${i+1}`;
 
-  const members=ALL_MEMBERS.map(name=>{
+  const members=LEADERBOARD_MEMBERS.map(name=>{
     const pt=pts[name]??0;
     const orgData=ORG.find(o=>o.name===name)||{title:'',cls:'',lv:6,dept:''};
     const bt=bossTasks.filter(t=>t.assignee===name&&/\[target:\d+\]/.test(t.description||'')).sort((a,b)=>b.id-a.id)[0];
