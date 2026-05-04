@@ -60,7 +60,7 @@ const memberIds = {
 
 const OPENAI_API_KEY = env('OPENAI_API_KEY');
 const OPENAI_MODEL = env('OPENAI_MODEL', 'gpt-4.1-mini');
-const OPENAI_TRANSCRIBE_MODEL = env('OPENAI_TRANSCRIBE_MODEL', 'whisper-1');
+const OPENAI_TRANSCRIBE_MODEL = env('OPENAI_TRANSCRIBE_MODEL', 'gpt-4o-transcribe');
 const TELEGRAM_BOT_TOKEN = env('TELEGRAM_BOT_TOKEN');
 const BOSS_CHAT_ID = env('BOSS_CHAT_ID');
 const SUPABASE_URL = env('SUPABASE_URL');
@@ -152,6 +152,7 @@ async function openAITranscribe(req, res) {
     const form = new FormData();
     form.append('model', OPENAI_TRANSCRIBE_MODEL);
     form.append('language', 'zh');
+    form.append('prompt', '这是一套中文高管任务管理系统的老板语音指令。常见人名和词汇包括：秦总、王玟、王文、王雯、韩笑、吴晓磊、陈冬梅、张娜娜、张慧、刘菲、陈伟、任务单、下发、交付时间、交付结果、一般、紧急、很紧急、Telegram、龙虾王工作站、任务看板、财务看板、龙虎榜。请优先保留中文人名和业务词，不要把“下发”识别成“下方”。');
     form.append('file', new Blob([audio], { type: contentType }), `speech.${ext}`);
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',

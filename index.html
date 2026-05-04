@@ -1613,7 +1613,7 @@ function VoiceFloat({tasks}){
         if(audioCtx) audioCtx.close().catch(()=>{});
         const blob=new Blob(recorderChunksRef.current,{type:rec.mimeType||'audio/webm'});
         recorderChunksRef.current=[];
-        stopBars();setPhase('proc');setStatus('正在转文字...');
+        stopBars();setPhase('proc');setStatus('我听到了，正在整理...');
         try{
           const text=await transcribeAudio(blob);
           latestSpeechRef.current=text;
@@ -1748,7 +1748,7 @@ function VoiceFloat({tasks}){
     }
     if(phase==='rec'||isRecRef.current){
       clearTimeout(silenceSubmitTimerRef.current);
-      if(recorderRef.current){setStatus('正在转文字...');stopActiveRecording();}
+      if(recorderRef.current){setStatus('我听到了，正在整理...');stopActiveRecording();}
       else {safeStopRec('stop');stopBars();setPhase('idle');setStatus('已暂停，点我继续说。');setTimeout(()=>setStatus('点击说话 · 可下达任务'),2500);}
       return;
     }
