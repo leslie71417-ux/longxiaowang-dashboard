@@ -512,6 +512,7 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;backgr
 .sheet-form{display:grid;grid-template-columns:52px 1fr;gap:5px 8px;margin-top:2px;}
 .sheet-k{font-size:.56rem;color:#64748B;font-weight:800;}
 .sheet-v{font-size:.61rem;color:#CBD5E1;line-height:1.35;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+.sheet-v-chips{display:flex;-webkit-line-clamp:unset;-webkit-box-orient:unset;gap:5px;flex-wrap:wrap;overflow:visible;}
 .sheet-empty{font-size:.62rem;color:#64748B;line-height:1.5;margin-top:8px;text-align:center;}
 
 /* ===== Task Sheet Page ===== */
@@ -532,10 +533,13 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;backgr
 .excel-table tr:nth-child(even) td{background:#F8FAFC;}
 .excel-task-title{font-weight:800;line-height:1.4;}
 .excel-deliverable{line-height:1.45;color:#334155;}
-.urgency-badge,.done-badge{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:.62rem;font-weight:900;white-space:nowrap;}
+.urgency-badge,.done-badge,.level-badge{display:inline-flex;align-items:center;gap:3px;border-radius:999px;padding:3px 8px;font-size:.62rem;font-weight:900;white-space:nowrap;}
 .urgency-high{background:#FEF2F2;color:#B91C1C;border:1px solid #FECACA;}
 .urgency-mid{background:#FFFBEB;color:#92400E;border:1px solid #FDE68A;}
 .urgency-low{background:#ECFDF5;color:#047857;border:1px solid #A7F3D0;}
+.level-normal{background:#ECFDF5;color:#047857;border:1px solid #A7F3D0;}
+.level-urgent{background:#FFFBEB;color:#92400E;border:1px solid #FDE68A;}
+.level-critical{background:#FEF2F2;color:#B91C1C;border:1px solid #FECACA;}
 .done-completed,.done-reported{background:#ECFDF5;color:#047857;border:1px solid #A7F3D0;}
 .done-active{background:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;}
 .done-pending{background:#F8FAFC;color:#475569;border:1px solid #CBD5E1;}
@@ -788,6 +792,18 @@ const P={high:{label:'高',cls:'p-high',e:'↑'},mid:{label:'中',cls:'p-mid',e:
 const SCYCLE=['pending','in-progress','completed','blocked'];
 const SCOL={pending:'#9CA3AF','in-progress':'#3B82F6',completed:'#16A34A',blocked:'#E11D48'};
 function priorityText(p){return({high:'高',mid:'中',low:'低'}[p]||'中');}
+function priorityMeta(p){
+  const label=priorityText(p);
+  if(/高|high/.test(String(p))) return {label,emoji:'🔴',cls:'urgency-high'};
+  if(/低|low/.test(String(p))) return {label,emoji:'🟢',cls:'urgency-low'};
+  return {label,emoji:'🟡',cls:'urgency-mid'};
+}
+function levelMeta(v){
+  const s=String(v||'一般');
+  if(/很紧急|特别急|非常急|十万火急/.test(s)) return {label:'很紧急',emoji:'😱',cls:'level-critical'};
+  if(/紧急|重要|重点|关键/.test(s)) return {label:'紧急',emoji:'😟',cls:'level-urgent'};
+  return {label:'一般',emoji:'😌',cls:'level-normal'};
+}
 function taskSheetSummary(notes){
   const text=notes||'';
   if(!text.includes('[task_sheet]')) return text;
@@ -795,11 +811,13 @@ function taskSheetSummary(notes){
     const line=text.split('\n').find(x=>x.startsWith(label+'：'));
     return line?line.slice(label.length+1).trim():'';
   };
+  const pri=priorityMeta(get('重要程度')||'中');
+  const lvl=levelMeta(get('项目')||'一般');
   return [
     '交付：'+(get('交付结果')||'待定'),
     '时间：'+(get('交付时间')||'待定'),
-    '重要：'+(get('重要程度')||'中'),
-    '项目：'+(get('项目')||'待定')
+    '重要：'+pri.emoji+pri.label,
+    '级别：'+lvl.emoji+lvl.label
   ].join(' · ');
 }
 
@@ -2716,8 +2734,8 @@ function TaskSheetPage({bossTasks=[],onBack}){
   const active=sheets.filter(s=>['sent','in-progress','pending'].includes(s.rawStatus)).length;
   const done=sheets.filter(s=>['completed','reported'].includes(s.rawStatus)).length;
   const blocked=sheets.filter(s=>s.rawStatus==='blocked').length;
-  const high=sheets.filter(s=>/高|high/.test(s.priority)).length;
-  const urgencyCls=s=>/高|high/.test(s.priority)?'urgency-high':/低|low/.test(s.priority)?'urgency-low':'urgency-mid';
+  const high=sheets.filter(s=>/高|high|紧急|很紧急/.test((s.priority||'')+' '+(s.project||''))).length;
+  const urgencyCls=s=>priorityMeta(s.priority).cls;
   const doneCls=s=>s.rawStatus==='blocked'?'done-blocked':['completed','reported'].includes(s.rawStatus)?'done-completed':['sent','pending'].includes(s.rawStatus)?'done-pending':'done-active';
   return(
     <div className="sheet-page">
@@ -2761,7 +2779,10 @@ function TaskSheetPage({bossTasks=[],onBack}){
                       <div className="excel-task-title">{s.title}</div>
                       <div className="excel-deliverable">{s.deliverable}</div>
                     </td>
-                    <td><span className={'urgency-badge '+urgencyCls(s)}>{s.priority}</span></td>
+                    <td>
+                      <span className={'urgency-badge '+urgencyCls(s)}>{priorityMeta(s.priority).emoji} {priorityMeta(s.priority).label}</span>
+                      <span className={'level-badge '+levelMeta(s.project).cls} style={{marginLeft:5}}>{levelMeta(s.project).emoji} {levelMeta(s.project).label}</span>
+                    </td>
                     <td><span className={'done-badge '+doneCls(s)}>{s.status}</span></td>
                     <td>{s.project}</td>
                   </tr>
@@ -2829,7 +2850,11 @@ function HomePage({tasks,bossTasks=[],onNav}){
                 <div className="sheet-k">负责人</div><div className="sheet-v">{latestSheet.assignee}</div>
                 <div className="sheet-k">交付</div><div className="sheet-v">{latestSheet.deadline}</div>
                 <div className="sheet-k">结果</div><div className="sheet-v">{latestSheet.deliverable}</div>
-                <div className="sheet-k">重要</div><div className="sheet-v">{latestSheet.priority} · {latestSheet.project}</div>
+                <div className="sheet-k">重要</div>
+                <div className="sheet-v sheet-v-chips">
+                  <span className={'urgency-badge '+priorityMeta(latestSheet.priority).cls}>{priorityMeta(latestSheet.priority).emoji} {priorityMeta(latestSheet.priority).label}</span>
+                  <span className={'level-badge '+levelMeta(latestSheet.project).cls}>{levelMeta(latestSheet.project).emoji} {levelMeta(latestSheet.project).label}</span>
+                </div>
               </div>
             </>
           ):(
