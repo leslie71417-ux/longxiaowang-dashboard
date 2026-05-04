@@ -2383,6 +2383,36 @@ function ProjectFinanceInline({proj}){
   );
 }
 
+function ProjectProgressOverview({tasks=[]}){
+  const total=tasks.length;
+  const done=tasks.filter(t=>t.status==='completed').length;
+  const doing=tasks.filter(t=>t.status==='in-progress').length;
+  const blocked=tasks.filter(t=>t.status==='blocked').length;
+  const pending=tasks.filter(t=>t.status==='pending').length;
+  const today=new Date();today.setHours(0,0,0,0);
+  const overdue=tasks.filter(t=>t.status!=='completed'&&t.deadline&&new Date(t.deadline)<today).length;
+  const rate=total?Math.round(done/total*100):0;
+  return(
+    <div style={{padding:'12px 14px 2px'}}>
+      <div style={{background:'#fff',border:'1px solid #E5E7EB',borderRadius:12,padding:'12px',boxShadow:'0 1px 6px rgba(15,23,42,.05)',marginBottom:12}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+          <div style={{fontSize:'.78rem',fontWeight:800,color:'#111827'}}>📈 项目概览统计</div>
+          <div style={{fontSize:'.7rem',fontWeight:800,color:'#16A34A'}}>{rate}% 完成</div>
+        </div>
+        <div className="prog-bar" style={{height:7,marginBottom:10}}><div className="prog-fill" style={{width:rate+'%'}}/></div>
+        <div className="summary-grid" style={{gridTemplateColumns:'repeat(3,1fr)',gap:6,marginTop:0}}>
+          <div className="summary-cell"><div className="summary-num" style={{color:'#111827'}}>{total}</div><div className="summary-lbl">全部</div></div>
+          <div className="summary-cell"><div className="summary-num" style={{color:'#1D4ED8'}}>{doing}</div><div className="summary-lbl">进行中</div></div>
+          <div className="summary-cell"><div className="summary-num" style={{color:'#16A34A'}}>{done}</div><div className="summary-lbl">已完成</div></div>
+          <div className="summary-cell"><div className="summary-num" style={{color:'#9CA3AF'}}>{pending}</div><div className="summary-lbl">未开始</div></div>
+          <div className="summary-cell"><div className="summary-num" style={{color:'#BE123C'}}>{blocked}</div><div className="summary-lbl">卡点</div></div>
+          <div className="summary-cell"><div className="summary-num" style={{color:'#92400E'}}>{overdue}</div><div className="summary-lbl">逾期</div></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ===== Task Drawer ===== */
 function TaskDrawer({tasks,bossTasks=[],filter,onClose,onEdit,onDelete}){
   const [openProj,setOpenProj]=useState(new Set()); // 默认全收起，点击才展开
@@ -2493,7 +2523,10 @@ function TaskDrawer({tasks,bossTasks=[],filter,onClose,onEdit,onDelete}){
                             <div className="proj-sub-body">
                               {sec==='org'&&React.createElement(ProjectBody,{proj,persons,bossTasks,openPerson,setOpenPerson,statusDot,buildLog,S,onEdit,onDelete,section:'org'})}
                               {sec==='finance'&&React.createElement(ProjectFinanceInline,{proj})}
-                              {sec==='progress'&&React.createElement(ProjectBody,{proj,persons,bossTasks,openPerson,setOpenPerson,statusDot,buildLog,S,onEdit,onDelete,section:'progress'})}
+                              {sec==='progress'&&React.createElement(React.Fragment,null,
+                                React.createElement(ProjectProgressOverview,{tasks:pts}),
+                                React.createElement(ProjectBody,{proj,persons,bossTasks,openPerson,setOpenPerson,statusDot,buildLog,S,onEdit,onDelete,section:'progress'})
+                              )}
                             </div>
                           )}
                         </div>
@@ -3424,74 +3457,13 @@ function App(){
       </div>
 
       <div className="card">
-        <div className="row-between">
-          <div className="sec-title">任务列表</div>
-          <button className="add-btn" onClick={()=>{setEditTask(null);setShowForm(true);}}>＋ 新建任务</button>
+        <div className="row-between" style={{marginBottom:0}}>
+          <div>
+            <div className="sec-title" style={{marginBottom:4}}>任务明细</div>
+            <div style={{fontSize:'.78rem',color:'#6B7280',lineHeight:1.6}}>任务列表已归档到「全部任务」入口，按项目查看组织架构、财务情况和工作进度。</div>
+          </div>
+          <button className="add-btn" onClick={()=>setDrawer('all')}>查看全部任务</button>
         </div>
-        {tasks.length===0?(
-          <div className="empty"><div style={{fontSize:'2.5rem',marginBottom:10}}>📋</div><div style={{fontWeight:600,marginBottom:4}}>暂无任务</div><div style={{fontSize:'.83rem'}}>点击「新建任务」开始添加</div></div>
-        ):(
-          <>
-            <div style={{overflowX:'auto'}}>
-              <table className="task-table">
-                <thead><tr><th>任务</th><th>负责人</th><th>截止日期</th><th>优先级</th><th>状态</th><th>交付文件</th><th></th></tr></thead>
-                <tbody>
-                  {tasks.map(t=>{
-                    const ov=t.status!=='completed'&&t.deadline&&new Date(t.deadline)<today;
-                    return(
-                      <tr key={t.id}>
-                        <td style={{maxWidth:260}}>
-                          <div className="task-name">{t.name}</div>
-                          {t.status==='blocked'&&t.blocker&&<div className="task-block">▲ {t.blocker}</div>}
-                          {t.notes&&<div className="task-sub">{taskSheetSummary(t.notes).length>88?taskSheetSummary(t.notes).slice(0,88)+'…':taskSheetSummary(t.notes)}</div>}
-                        </td>
-                        <td><span className="chip">{t.assignee||'—'}</span></td>
-                        <td style={{whiteSpace:'nowrap',fontSize:'.82rem'}}>
-                          {t.deadline?new Date(t.deadline).toLocaleDateString('zh-CN'):'—'}
-                          {ov&&<span className="ov">逾期</span>}
-                        </td>
-                        <td><span className={P[t.priority]?.cls}>{P[t.priority]?.e} {P[t.priority]?.label}</span></td>
-                        <td><span className={`badge ${S[t.status]?.cls}`} onClick={()=>cycle(t.id)} title="点击切换状态">{S[t.status]?.emoji} {S[t.status]?.label}</span></td>
-                        <td style={{minWidth:80}}>
-                          {t.files?.length>0?t.files.map((f,i)=><span key={i} className="file-tag">📄 {f.length>12?f.slice(0,12)+'…':f}</span>):<span style={{color:'#D1D5DB',fontSize:'.75rem'}}>—</span>}
-                        </td>
-                        <td style={{whiteSpace:'nowrap'}}>
-                          <button className="btn btn-ghost btn-sm" style={{marginRight:5}} onClick={()=>{setEditTask(t);setShowForm(true);}}>编辑</button>
-                          <button className="btn btn-del btn-sm" onClick={()=>del(t.id)}>删除</button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div className="mobile-cards">
-              {tasks.map(t=>{
-                const ov=t.status!=='completed'&&t.deadline&&new Date(t.deadline)<today;
-                return(
-                  <div key={t.id} className="m-card">
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'start',marginBottom:7}}>
-                      <div style={{fontWeight:700,flex:1,marginRight:8,fontSize:'.9rem'}}>{t.name}</div>
-                      <span className={`badge ${S[t.status]?.cls}`} onClick={()=>cycle(t.id)}>{S[t.status]?.emoji} {S[t.status]?.label}</span>
-                    </div>
-                    <div style={{fontSize:'.78rem',color:'#6B7280',display:'flex',flexWrap:'wrap',gap:'6px 12px'}}>
-                      <span>👤 {t.assignee||'—'}</span>
-                      {t.deadline&&<span>📅 {new Date(t.deadline).toLocaleDateString('zh-CN')}{ov&&<span className="ov">逾期</span>}</span>}
-                      <span className={P[t.priority]?.cls}>{P[t.priority]?.e} {P[t.priority]?.label}</span>
-                    </div>
-                    {t.status==='blocked'&&t.blocker&&<div className="task-block" style={{marginTop:5}}>▲ {t.blocker}</div>}
-                    {t.notes&&<div className="task-sub" style={{marginTop:6}}>{taskSheetSummary(t.notes)}</div>}
-                    {t.files?.length>0&&<div style={{marginTop:5}}>{t.files.map((f,i)=><span key={i} className="file-tag">📄 {f.length>18?f.slice(0,18)+'…':f}</span>)}</div>}
-                    <div style={{display:'flex',gap:7,marginTop:9}}>
-                      <button className="btn btn-ghost btn-sm" onClick={()=>{setEditTask(t);setShowForm(true);}}>编辑</button>
-                      <button className="btn btn-del btn-sm" onClick={()=>del(t.id)}>删除</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
       </div>
 
       <div className="card">
