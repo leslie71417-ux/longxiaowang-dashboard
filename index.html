@@ -1266,15 +1266,55 @@ function VoiceFloat({tasks}){
   const silenceSubmitTimerRef=useRef(null);
   const submittingSpeechRef=useRef(false);
   const pendingSpeechRef=useRef(false);
+  const latestSpeechRef=useRef('');
+  const speechHandlerRef=useRef(null);
   const lastSpokenRef=useRef('');
   const suppressListenUntilRef=useRef(0);
   const echoRetryRef=useRef(0);
+  const listenSeqRef=useRef(0);     // 当前语音识别轮次，旧回调自动失效
+  const ignoreEndRef=useRef(false); // 主动切换/停止时忽略浏览器补发的 onend
+  const quickRetryRef=useRef(0);    // 浏览器刚启动就断开时，自动重启一次
   const isRecRef=useRef(false);   // ref版phase，避免闭包旧值
   const gotResultRef=useRef(false); // 防止onend覆盖onresult
   const pickerListenRef=useRef(false); // 是否在等待语音选项目
 
-  const startBars=()=>{barTimerRef.current=setInterval(()=>setBars([...Array(5)].map(()=>Math.floor(Math.random()*9)+2)),110);};
-  const stopBars=()=>{clearInterval(barTimerRef.current);setBars([3,5,3,5,3]);};
+  const startBars=()=>{
+    clearInterval(barTimerRef.current);
+    barTimerRef.current=setInterval(()=>setBars([...Array(5)].map(()=>Math.floor(Math.random()*9)+2)),110);
+  };
+  const stopBars=()=>{clearInterval(barTimerRef.current);barTimerRef.current=null;setBars([3,5,3,5,3]);};
+  const safeStopRec=(mode='abort')=>{
+    clearTimeout(silenceSubmitTimerRef.current);
+    pendingSpeechRef.current=false;
+    submittingSpeechRef.current=false;
+    ignoreEndRef.current=true;
+    listenSeqRef.current+=1;
+    const r=recogRef.current;
+    recogRef.current=null;
+    isRecRef.current=false;
+    pickerListenRef.current=false;
+    if(r){
+      try{
+        if(mode==='stop'&&r.stop) r.stop();
+        else if(r.abort) r.abort();
+        else if(r.stop) r.stop();
+      }catch(e){}
+    }
+    setTimeout(()=>{ignoreEndRef.current=false;},180);
+  };
+  const beginRec=()=>{
+    safeStopRec('abort');
+    ignoreEndRef.current=false;
+    const seq=listenSeqRef.current+1;
+    listenSeqRef.current=seq;
+    isRecRef.current=true;
+    gotResultRef.current=false;
+    pendingSpeechRef.current=false;
+    submittingSpeechRef.current=false;
+    recStartedAtRef.current=Date.now();
+    return seq;
+  };
+  const isOldRec=(seq,r)=>seq!==listenSeqRef.current||recogRef.current!==r;
 
   // 自动保存婷婷声音
   useEffect(()=>{
@@ -1290,6 +1330,7 @@ function VoiceFloat({tasks}){
 
   // 同步 pendingTask 到 ref（供异步回调访问最新值）
   useEffect(()=>{pendingTaskRef.current=pendingTask;},[pendingTask]);
+  useEffect(()=>()=>safeStopRec('abort'),[]);
 
   // 成员名字 + 所有可能的拼音/谐音/英文别名
   const MEMBER_ALIASES={
@@ -1449,15 +1490,22 @@ function VoiceFloat({tasks}){
   const needsMoreSpeech=t=>/(然后|还有|另外|再加|接着|等一下|等等|这个|那个|嗯|呃|就是|同时|并且|还有一个)$/.test((t||'').trim());
   const submitAfterSilence=(text,handler,wait=2400)=>{
     clearTimeout(silenceSubmitTimerRef.current);
-    pendingSpeechRef.current=!!text.trim();
+    latestSpeechRef.current=(text||'').trim();
+    speechHandlerRef.current=handler;
+    pendingSpeechRef.current=!!latestSpeechRef.current;
     const delay=needsMoreSpeech(text)?4200:wait;
     silenceSubmitTimerRef.current=setTimeout(()=>{
       if(!text.trim()) return;
       pendingSpeechRef.current=false;
       submittingSpeechRef.current=true;
-      if(recogRef.current){try{recogRef.current.stop();}catch(e){}}
+      ignoreEndRef.current=true;
+      const r=recogRef.current;
+      recogRef.current=null;
+      isRecRef.current=false;
+      if(r){try{r.stop();}catch(e){}}
       stopBars();setPhase('proc');
       handler(text.trim());
+      setTimeout(()=>{ignoreEndRef.current=false;},180);
     },delay);
   };
 
@@ -1497,6 +1545,7 @@ function VoiceFloat({tasks}){
     suppressListenUntilRef.current=Date.now()+120;
     reviewListenTimerRef.current=setTimeout(()=>{
       echoRetryRef.current=0;
+      quickRetryRef.current=0;
       startTaskReviewListen(focus,{auto:true});
     },delay);
   };
@@ -1520,17 +1569,19 @@ function VoiceFloat({tasks}){
     const SR=speechApi();
     if(!SR){setStatus('当前浏览器不支持语音识别，请用Chrome打开');setTimeout(()=>setStatus('点击说话 · 可下达任务'),4000);return;}
     window.speechSynthesis.cancel();
+    const seq=beginRec();
     const r=new SR();
     r.lang='zh-CN';r.continuous=true;r.interimResults=true;r.maxAlternatives=1;
     recogRef.current=r;
-    gotResultRef.current=false;
-    recStartedAtRef.current=Date.now();
+    latestSpeechRef.current='';
+    speechHandlerRef.current=null;
     setPhase('rec');
     setStatus('正在启动语音...');
     startBars();
     if(isFirst){beepFn(1047,.05,0);beepFn(1319,.05,.1);}
 
     const handleMainTranscript=transcript=>{
+      quickRetryRef.current=0;
       gotResultRef.current=true;
       if(isTaskIntent(transcript)){
         parseTaskAI(transcript).then(async task=>{
@@ -1542,30 +1593,48 @@ function VoiceFloat({tasks}){
       }
     };
     r.onresult=ev=>{
+      if(isOldRec(seq,r)) return;
       const transcript=collectTranscript(ev);
+      gotResultRef.current=!!transcript;
       setStatus(`"${transcript}"`);
       submitAfterSilence(transcript,handleMainTranscript,2800);
     };
 
     r.onerror=ev=>{
+      if(isOldRec(seq,r)||ignoreEndRef.current||ev.error==='aborted') return;
+      isRecRef.current=false;
       stopBars();setPhase('idle');
       const msg={'no-speech':'没检测到声音，再试试','audio-capture':'麦克风无法访问','not-allowed':'请允许麦克风权限','network':'网络错误'}[ev.error]||('识别错误:'+ev.error);
       setStatus(msg);setTimeout(()=>setStatus('点击说话 · 可下达任务'),3000);
     };
-    r.onstart=()=>setStatus(isFirst?'说吧，说完自动发送...':'继续说...');
+    r.onstart=()=>{
+      if(isOldRec(seq,r)) return;
+      setStatus(isFirst?'说吧，说完自动发送...':'继续说...');
+    };
     r.onend=()=>{
+      if(isOldRec(seq,r)||ignoreEndRef.current) return;
+      isRecRef.current=false;
       if(!pendingSpeechRef.current) clearTimeout(silenceSubmitTimerRef.current);
       if(submittingSpeechRef.current){submittingSpeechRef.current=false;return;}
       if(!gotResultRef.current){
         const tooFast=Date.now()-recStartedAtRef.current<1200;
+        if(tooFast&&quickRetryRef.current<1){
+          quickRetryRef.current+=1;
+          stopBars();setPhase('idle');setStatus('语音刚断开，马上重试一次...');
+          setTimeout(()=>startMainListen(false),350);
+          return;
+        }
+        quickRetryRef.current=0;
         stopBars();setPhase('idle');
-        setStatus(tooFast?'语音被浏览器中断，请用Chrome或允许麦克风':'点击说话 · 可下达任务');
-        if(tooFast) setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);
+        setStatus(tooFast?'麦克风没有保持连接，点我再试一次':'点击说话 · 可下达任务');
+        if(tooFast) setTimeout(()=>setStatus('点击说话 · 可下达任务'),4500);
       }
     };
     try{
       r.start();
     }catch(err){
+      if(isOldRec(seq,r)) return;
+      isRecRef.current=false;
       stopBars();setPhase('idle');
       setStatus('语音启动失败：'+(err&&err.message?err.message:'请检查麦克风权限'));
       setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);
@@ -1585,24 +1654,45 @@ function VoiceFloat({tasks}){
       stopBars();
       const pt=pendingTaskRef.current;
       if(pt&&pt.mode&&pt.focus){
+        quickRetryRef.current=0;
         setStatus('好的，您说');
         startTaskReviewListen(pt.focus);
       } else {
+        quickRetryRef.current=0;
         setStatus('好的，您说');
         startMainListen(false);
       }
       return;
     }
-    if(phase==='rec'){
+    if(phase==='rec'||isRecRef.current){
       clearTimeout(silenceSubmitTimerRef.current);
-      if(recogRef.current) recogRef.current.stop();
+      const text=latestSpeechRef.current;
+      const handler=speechHandlerRef.current;
+      if(text&&handler){
+        pendingSpeechRef.current=false;
+        submittingSpeechRef.current=true;
+        ignoreEndRef.current=true;
+        const r=recogRef.current;
+        recogRef.current=null;
+        isRecRef.current=false;
+        if(r){try{r.stop();}catch(e){}}
+        stopBars();setPhase('proc');
+        handler(text);
+        setTimeout(()=>{ignoreEndRef.current=false;},180);
+      }else{
+        safeStopRec('stop');
+        stopBars();setPhase('idle');setStatus('已暂停，点我继续说。');
+        setTimeout(()=>setStatus('点击说话 · 可下达任务'),2500);
+      }
       return;
     }
     const pt=pendingTaskRef.current;
     if(pt&&pt.mode&&pt.focus){
+      quickRetryRef.current=0;
       startTaskReviewListen(pt.focus);
       return;
     }
+    quickRetryRef.current=0;
     startMainListen(true);
   };
 
@@ -1610,10 +1700,13 @@ function VoiceFloat({tasks}){
   const startTaskReviewListen=(focus,{auto=false}={})=>{
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(!SR||!pendingTaskRef.current) return;
+    const seq=beginRec();
     pickerListenRef.current=true;
     const r=new SR();
     r.lang='zh-CN';r.continuous=true;r.interimResults=true;r.maxAlternatives=3;
     recogRef.current=r;
+    latestSpeechRef.current='';
+    speechHandlerRef.current=null;
     setPhase('rec');setStatus(focus==='confirm'?'我在听，您可修改或确认':'我在听，请补充');
     startBars();
     const handleReviewAnswer=answer=>{
@@ -1640,46 +1733,64 @@ function VoiceFloat({tasks}){
         pendingTaskRef.current=next;
         setPendingTask(next);
         const prompt='收到。归哪个项目？'+projList+'，或其他。';
+        quickRetryRef.current=0;
         speakThen(prompt,()=>startPickerListen());
         return;
       }
       mergeTaskAnswerAI(draft,answer,focus).then(nextDraft=>askTaskReview(nextDraft,{brief:focus!=='confirm',changedFrom:focus==='confirm'?draft:null})).catch(onErr);
     };
     r.onresult=ev=>{
+      if(isOldRec(seq,r)) return;
       const answer=collectTranscript(ev);
+      gotResultRef.current=!!answer;
       if(Date.now()<suppressListenUntilRef.current) return;
       setStatus(answer?`"${answer}"`:'我在听');
       submitAfterSilence(answer,handleReviewAnswer,2600);
     };
     r.onerror=ev=>{
+      if(isOldRec(seq,r)||ignoreEndRef.current||ev.error==='aborted') return;
       clearTimeout(silenceSubmitTimerRef.current);
+      isRecRef.current=false;
       pickerListenRef.current=false;stopBars();setPhase('idle');
       const msg=ev.error==='no-speech'?'我先等着，不催您。':ev.error==='not-allowed'?'请允许麦克风权限':'没听清，点我再说。';
       setStatus(msg);
       setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);
     };
     r.onend=()=>{
+      if(isOldRec(seq,r)||ignoreEndRef.current) return;
+      isRecRef.current=false;
       if(!pendingSpeechRef.current) clearTimeout(silenceSubmitTimerRef.current);
       if(submittingSpeechRef.current){submittingSpeechRef.current=false;return;}
+      const tooFast=Date.now()-recStartedAtRef.current<1200;
+      if(tooFast&&quickRetryRef.current<1){
+        quickRetryRef.current+=1;
+        pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音刚断开，马上重试一次...');
+        setTimeout(()=>startTaskReviewListen(focus,{auto:true}),350);
+        return;
+      }
+      quickRetryRef.current=0;
       if(pickerListenRef.current){
         pickerListenRef.current=false;stopBars();setPhase('idle');
         setStatus(auto?'我先等着，不催您。':'我先等着，想好了点我继续。');
         setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);
       }
     };
-    try{r.start();}catch(err){pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音启动失败，请再点一次。');}
+    try{r.start();}catch(err){if(isOldRec(seq,r))return;isRecRef.current=false;pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音启动失败，请再点一次。');}
   };
 
   // 语音监听项目选择（picker出现后自动调用）
   const startPickerListen=()=>{
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(!SR||!pendingTaskRef.current) return;
+    const seq=beginRec();
     pickerListenRef.current=true;
     const r=new SR();
     r.lang='zh-CN';r.continuous=false;r.interimResults=false;r.maxAlternatives=3;
     recogRef.current=r;
     setPhase('rec');setStatus('请说项目名称...');startBars();
     r.onresult=ev=>{
+      if(isOldRec(seq,r)) return;
+      gotResultRef.current=true;
       pickerListenRef.current=false;
       stopBars();setPhase('proc');
       const alts=Array.from(ev.results[0]).map(a=>a.transcript);
@@ -1691,12 +1802,26 @@ function VoiceFloat({tasks}){
       confirmProject(proj);
     };
     r.onerror=ev=>{
+      if(isOldRec(seq,r)||ignoreEndRef.current||ev.error==='aborted') return;
+      isRecRef.current=false;
       pickerListenRef.current=false;stopBars();setPhase('idle');
       setStatus(ev.error==='no-speech'?'先不急，点我再选项目。':'没听清项目，点我再说。');
       setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);
     };
-    r.onend=()=>{if(pickerListenRef.current){pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('先不急，点我再选项目。');setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);}};
-    try{r.start();}catch(err){pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音启动失败，请再点一次。');}
+    r.onend=()=>{
+      if(isOldRec(seq,r)||ignoreEndRef.current) return;
+      isRecRef.current=false;
+      const tooFast=Date.now()-recStartedAtRef.current<1200;
+      if(tooFast&&quickRetryRef.current<1){
+        quickRetryRef.current+=1;
+        pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音刚断开，马上重试一次...');
+        setTimeout(()=>startPickerListen(),350);
+        return;
+      }
+      quickRetryRef.current=0;
+      if(pickerListenRef.current){pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('先不急，点我再选项目。');setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);}
+    };
+    try{r.start();}catch(err){if(isOldRec(seq,r))return;isRecRef.current=false;pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音启动失败，请再点一次。');}
   };
 
   // 老板选了项目后，执行存档 + 通知
