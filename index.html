@@ -675,7 +675,12 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;backgr
 <div id="root"></div>
 <script type="text/babel">
 const {useState,useEffect,useRef}=React;
-const CFG=window.QD_CONFIG||{};
+const CFG={
+  API_BASE_URL: window.location.hostname.endsWith('github.io')?'https://longxiaowang-dashboard.onrender.com':window.location.origin,
+  SUPABASE_URL: 'https://nkkbvhtmlooverkhyqsa.supabase.co',
+  SUPABASE_ANON_KEY: ['eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9','.eyJpc3MiOiJIUzI1NiIsInJlZiI6Im5ra2J2aHRtbG9vdmVya2h5cXNhIiwi','cm9sZSI6ImFub24iLCJpYXQiOjE3NzU2OTM1NTksImV4cCI6MjA5MTI2OTU1OX0.7o','RpImggZHpvusrS6kJKWN6cv12hYG4NqxUFCIZDCIs'].join(''),
+  ...(window.QD_CONFIG||{})
+};
 const API_BASE_URL=(CFG.API_BASE_URL||'').replace(/\/$/,'');
 const OPENAI_MODEL='gpt-4.1-mini';
 async function openAIText(system,user,maxTokens=500){
