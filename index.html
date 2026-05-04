@@ -1303,6 +1303,7 @@ function VoiceFloat({tasks}){
   const latestSpeechRef=useRef('');
   const speechHandlerRef=useRef(null);
   const lastSpokenRef=useRef('');
+  const ttsSeqRef=useRef(0);
   const suppressListenUntilRef=useRef(0);
   const echoRetryRef=useRef(0);
   const listenSeqRef=useRef(0);     // 当前语音识别轮次，旧回调自动失效
@@ -1311,6 +1312,8 @@ function VoiceFloat({tasks}){
   const isRecRef=useRef(false);   // ref版phase，避免闭包旧值
   const gotResultRef=useRef(false); // 防止onend覆盖onresult
   const pickerListenRef=useRef(false); // 是否在等待语音选项目
+  const liveCaptionRef=useRef(null); // 本地浏览器实时字幕，只做反馈，最终仍用 OpenAI 转写
+  const liveTranscriptRef=useRef('');
 
   const startBars=()=>{
     clearInterval(barTimerRef.current);
@@ -1320,6 +1323,7 @@ function VoiceFloat({tasks}){
   const safeStopRec=(mode='abort')=>{
     clearTimeout(silenceSubmitTimerRef.current);
     clearInterval(analyserTimerRef.current);
+    stopLiveCaption();
     pendingSpeechRef.current=false;
     submittingSpeechRef.current=false;
     ignoreEndRef.current=true;
@@ -1352,6 +1356,46 @@ function VoiceFloat({tasks}){
     }
     setTimeout(()=>{ignoreEndRef.current=false;},180);
   };
+  const stopLiveCaption=()=>{
+    const r=liveCaptionRef.current;
+    liveCaptionRef.current=null;
+    if(r){
+      try{r.onend=null;r.onerror=null;r.onresult=null;}catch(e){}
+      try{r.abort&&r.abort();}catch(e){}
+      try{r.stop&&r.stop();}catch(e){}
+    }
+  };
+  const startLiveCaption=(seq,onLive)=>{
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR) return;
+    try{
+      stopLiveCaption();
+      const r=new SR();
+      liveCaptionRef.current=r;
+      r.lang='zh-CN';
+      r.continuous=true;
+      r.interimResults=true;
+      r.maxAlternatives=1;
+      r.onresult=e=>{
+        if(seq!==listenSeqRef.current||liveCaptionRef.current!==r) return;
+        let text='';
+        for(let i=0;i<e.results.length;i++){
+          text+=(e.results[i]?.[0]?.transcript||'');
+        }
+        text=text.trim();
+        if(text){
+          liveTranscriptRef.current=text;
+          onLive&&onLive(text);
+        }
+      };
+      r.onerror=()=>{};
+      r.onend=()=>{
+        if(seq!==listenSeqRef.current||liveCaptionRef.current!==r||!isRecRef.current) return;
+        setTimeout(()=>{try{if(liveCaptionRef.current===r&&isRecRef.current) r.start();}catch(e){}},220);
+      };
+      r.start();
+    }catch(e){}
+  };
   const beginRec=()=>{
     safeStopRec('abort');
     ignoreEndRef.current=false;
@@ -1361,6 +1405,7 @@ function VoiceFloat({tasks}){
     gotResultRef.current=false;
     pendingSpeechRef.current=false;
     submittingSpeechRef.current=false;
+    liveTranscriptRef.current='';
     recStartedAtRef.current=Date.now();
     return seq;
   };
@@ -1476,13 +1521,13 @@ function VoiceFloat({tasks}){
     {key:'assignee',label:'负责人',ask:'这张任务单交给哪位高管负责？'},
     {key:'deadline',label:'交付时间',ask:'这项任务需要在什么时间交付？'},
     {key:'deliverable',label:'交付结果',ask:'您希望对方最终交付什么结果？'},
-    {key:'priority',label:'重要程度',ask:'这项任务的重要程度是高、中还是低？'},
+    {key:'priority',label:'重要程度',ask:'这项任务是一般、紧急，还是很紧急？'},
   ];
   const missingTaskFields=t=>TASK_FIELDS.filter(f=>{
     const v=t&&t[f.key];
     return !v||v==='待定'||String(v).trim()==='';
   });
-  const taskBrief=t=>(t.assignee||'待定')+'，'+(t.deadline||'待定')+'交付：'+(t.deliverable||t.description||t.title||'待定')+'。重要程度'+priorityText(t.priority)+'。';
+  const taskBrief=t=>'我记下了：'+(t.assignee||'待定')+'，'+(t.deadline||'待定')+'，交付'+(t.deliverable||t.description||t.title||'待定')+'。';
   const normSpeech=t=>(t||'').replace(/[，。！？、,.!?\\s]/g,'').toLowerCase();
   const normalizeIntent=t=>normSpeech(t).replace(/下方/g,'下发').replace(/下饭/g,'下发').replace(/吓发/g,'下发').replace(/发下去/g,'下发').replace(/发出去/g,'下发');
   const isConfirmText=t=>{
@@ -1510,7 +1555,7 @@ function VoiceFloat({tasks}){
     const today=new Date().toISOString().split('T')[0];
     const found=fuzzyFindMember(answer.toLowerCase());
     const memberList=Object.keys(MEMBER_ALIASES).join('、');
-    const system='你是任务单补全助手。只输出纯JSON，不要解释、不要Markdown。根据老板的新回答修正任务单。JSON格式：{"assignee":"成员名或待定","title":"任务标题","deliverable":"要交付的结果","description":"补充说明或空字符串","deadline":"YYYY-MM-DD或null","priority":"high|mid|low"}。成员名必须尽量使用给定成员列表中的标准中文名；deadline必须结合今天日期解析；老板说高/紧急/重要则priority=high，说低/不急则low，否则mid。';
+    const system='你是任务单补全助手。只输出纯JSON，不要解释、不要Markdown。根据老板的新回答修正任务单。JSON格式：{"assignee":"成员名或待定","title":"任务标题","deliverable":"要交付的结果","description":"补充说明或空字符串","deadline":"YYYY-MM-DD或null","priority":"high|mid|low"}。成员名必须尽量使用给定成员列表中的标准中文名；deadline必须结合今天日期解析；老板说很紧急/特别急/马上/立刻/高/重要则priority=high，说一般/不急/低则low，说紧急则mid，没说则沿用当前任务单。';
     const user='今天日期：'+today+'\n可识别成员：'+memberList+'\n当前重点字段：'+(focus||'整体修正')+'\n当前任务单：'+JSON.stringify(draft||{})+'\n老板新回答：'+answer+'\n预检测负责人：'+(found||'无');
     const raw=await openAIText(system,user,500);
     const m=raw.match(/\{[\s\S]*\}/);
@@ -1582,7 +1627,7 @@ function VoiceFloat({tasks}){
     },delay);
   };
 
-  const startAudioListen=async({status,onText,silenceMs=1900,maxMs=26000,minMs=900})=>{
+  const startAudioListen=async({status,onText,silenceMs=3200,maxMs=36000,minMs=1200})=>{
     if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){
       setStatus('当前浏览器不支持录音，请用Chrome打开');
       setTimeout(()=>setStatus('点击说话 · 可下达任务'),4000);
@@ -1614,12 +1659,14 @@ function VoiceFloat({tasks}){
       const samples=new Uint8Array(analyser.fftSize);
       let heard=false,lastVoice=Date.now();
       const started=Date.now();
+      let noise=0.018,noiseN=0,voiceFrames=0,lastCaptionAt=0;
       const finish=()=>{if(seq===listenSeqRef.current) stopActiveRecording();};
       rec.ondataavailable=e=>{if(e.data&&e.data.size>0) recorderChunksRef.current.push(e.data);};
       rec.onerror=e=>{if(seq!==listenSeqRef.current)return;onErr(e.error||new Error('录音失败'));};
       rec.onstop=async()=>{
         if(seq!==listenSeqRef.current||ignoreEndRef.current) return;
         clearInterval(analyserTimerRef.current);
+        stopLiveCaption();
         isRecRef.current=false;
         recorderRef.current=null;
         const tracks=mediaStreamRef.current;
@@ -1641,6 +1688,11 @@ function VoiceFloat({tasks}){
       };
       rec.start(250);
       setStatus(status||'我在听，说完会自动发送...');
+      startLiveCaption(seq,text=>{
+        if(Date.now()-lastCaptionAt<220) return;
+        lastCaptionAt=Date.now();
+        setStatus('正在听：'+(text.length>24?text.slice(-24):text));
+      });
       analyserTimerRef.current=setInterval(()=>{
         if(seq!==listenSeqRef.current){clearInterval(analyserTimerRef.current);return;}
         analyser.getByteTimeDomainData(samples);
@@ -1648,9 +1700,28 @@ function VoiceFloat({tasks}){
         for(let i=0;i<samples.length;i++){const v=(samples[i]-128)/128;sum+=v*v;}
         const rms=Math.sqrt(sum/samples.length);
         const now=Date.now();
-        if(rms>0.035){heard=true;lastVoice=now;}
+        if(!heard&&now-started<900){
+          noise=(noise*noiseN+rms)/(noiseN+1);
+          noiseN+=1;
+        }
+        const threshold=Math.max(0.026,noise*3.1);
+        if(rms>threshold){
+          voiceFrames+=1;
+          if(voiceFrames>=2){
+            heard=true;
+            lastVoice=now;
+          }
+        }else{
+          voiceFrames=Math.max(0,voiceFrames-1);
+        }
+        if(liveTranscriptRef.current){
+          heard=true;
+          lastVoice=Math.max(lastVoice,now-600);
+        }
         if(now-started>maxMs){finish();return;}
-        if(heard&&now-lastVoice>silenceMs&&now-started>minMs) finish();
+        const liveText=liveTranscriptRef.current||'';
+        const pauseMs=needsMoreSpeech(liveText)?Math.max(silenceMs,5200):silenceMs;
+        if(heard&&now-lastVoice>pauseMs&&now-started>minMs) finish();
       },180);
     }catch(err){
       if(seq!==listenSeqRef.current) return;
@@ -1663,19 +1734,23 @@ function VoiceFloat({tasks}){
   };
 
   const speak=(ans,noAutoResume=false)=>{
+    const ttsSeq=++ttsSeqRef.current;
     setPhase('talking');setStatus(ans.length>30?ans.slice(0,30)+'…':ans);
     startBars();beepFn(1047,.05,0);beepFn(1319,.06,.1);
     makeTTS(ans).then(()=>{
+      if(ttsSeq!==ttsSeqRef.current) return;
       stopBars();
       setPhase('idle');setStatus('点击说话 · 可下达任务');
     });
   };
 
   const speakThen=async(ans,next)=>{
+    const ttsSeq=++ttsSeqRef.current;
     lastSpokenRef.current=ans;
     setPhase('talking');setStatus(ans.length>30?ans.slice(0,30)+'…':ans);
     startBars();beepFn(1047,.05,0);beepFn(1319,.06,.1);
     await makeTTS(ans);
+    if(ttsSeq!==ttsSeqRef.current) return;
     stopBars();
     if(next) next();
     else {setPhase('idle');setStatus('点击说话 · 可下达任务');}
@@ -1694,7 +1769,7 @@ function VoiceFloat({tasks}){
     clearTimeout(reviewListenTimerRef.current);
     await waitSpeechIdle();
     setPhase('idle');
-    setStatus('请说修改，或说确认下发');
+    setStatus('您可以直接说修改，或说可以下发');
     suppressListenUntilRef.current=Date.now()+120;
     reviewListenTimerRef.current=setTimeout(()=>{
       echoRetryRef.current=0;
@@ -1709,12 +1784,12 @@ function VoiceFloat({tasks}){
     pendingTaskRef.current=pt;
     setPendingTask(pt);
     if(missing.length){
-      const prompt='还差'+missing[0].label+'。'+missing[0].ask;
-      speakThen(prompt,()=>listenAfterPrompt(missing[0].key,850));
+      const prompt=missing[0].ask;
+      speakThen(prompt,()=>listenAfterPrompt(missing[0].key,450));
       return;
     }
-    const prompt=changedFrom?changedBrief(changedFrom,draft)+'确认下发吗？':brief?'任务单已齐，确认下发吗？':taskBrief(draft)+'确认下发吗？';
-    speakThen(prompt,()=>listenAfterPrompt('confirm',900));
+    const prompt=changedFrom?changedBrief(changedFrom,draft)+'可以下发吗？':brief?'已更新。可以下发吗？':taskBrief(draft)+'可以下发吗？';
+    speakThen(prompt,()=>listenAfterPrompt('confirm',500));
   };
 
   // 主监听会话（可被 speak 回调 or handleClick 调用）
@@ -1733,10 +1808,11 @@ function VoiceFloat({tasks}){
       }
     };
     startAudioListen({
-      status:isFirst?'说吧，说完自动发送...':'继续说...',
+      status:isFirst?'您说，我会等您说完':'继续说，我在听',
       onText:handleMainTranscript,
-      silenceMs:2200,
-      maxMs:30000
+      silenceMs:3600,
+      maxMs:45000,
+      minMs:1400
     });
   };
 
@@ -1747,6 +1823,7 @@ function VoiceFloat({tasks}){
     voiceTapRef.current=now;
     clearTimeout(reviewListenTimerRef.current);
     if(phase==='talking'||phase==='proc'){
+      ttsSeqRef.current+=1;
       window.speechSynthesis.cancel();
       lastSpokenRef.current='';
       suppressListenUntilRef.current=0;
@@ -1812,10 +1889,11 @@ function VoiceFloat({tasks}){
       mergeTaskAnswerAI(draft,answer,focus).then(nextDraft=>askTaskReview(nextDraft,{brief:focus!=='confirm',changedFrom:focus==='confirm'?draft:null})).catch(onErr);
     };
     startAudioListen({
-      status:focus==='confirm'?'我在听，您可修改或确认':'我在听，请补充',
+      status:focus==='confirm'?'您说修改，或说可以下发':'我在听，您慢慢说',
       onText:handleReviewAnswer,
-      silenceMs:auto?2600:2200,
-      maxMs:30000
+      silenceMs:auto?3600:3300,
+      maxMs:42000,
+      minMs:1200
     });
   };
 
@@ -1824,8 +1902,9 @@ function VoiceFloat({tasks}){
     if(!pendingTaskRef.current) return;
     startAudioListen({
       status:'请说一般、紧急或很紧急...',
-      silenceMs:1500,
-      maxMs:10000,
+      silenceMs:2300,
+      maxMs:12000,
+      minMs:800,
       onText:t=>{
       let proj=null;
       if(/很紧急|特别急|非常急|十万火急|马上|立刻|最高/.test(t)) proj='很紧急';
