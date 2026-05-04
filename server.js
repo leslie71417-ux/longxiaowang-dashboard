@@ -70,7 +70,7 @@ function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Seed-Token',
   };
 }
 
@@ -169,6 +169,93 @@ async function sbRequest(method, restPath, body) {
   return text ? JSON.parse(text) : [];
 }
 
+const OLD_DASHBOARD_DEFAULT_TASKS = [
+  {
+    id: 1,
+    name: '完成Q1季度报告',
+    assignee: '张三',
+    deadline: '2026-03-31',
+    priority: 'high',
+    status: 'in-progress',
+    blocker: '',
+    files: ['Q1草稿.docx'],
+    notes: '需要包含销售数据和市场分析',
+    project: null,
+    created_at: '2026-03-20',
+  },
+  {
+    id: 2,
+    name: '产品原型设计评审',
+    assignee: '李四',
+    deadline: '2026-03-28',
+    priority: 'mid',
+    status: 'completed',
+    blocker: '',
+    files: ['prototype_v2.fig'],
+    notes: '已完成3轮修改，获得团队认可',
+    project: null,
+    created_at: '2026-03-18',
+  },
+  {
+    id: 3,
+    name: '后端API性能优化',
+    assignee: '王五',
+    deadline: '2026-04-05',
+    priority: 'high',
+    status: 'blocked',
+    blocker: '等待DBA团队提供数据库优化方案，预计明天到位',
+    files: [],
+    notes: '接口响应时间需从2s降至500ms',
+    project: null,
+    created_at: '2026-03-22',
+  },
+  {
+    id: 4,
+    name: '新员工培训材料整理',
+    assignee: '赵六',
+    deadline: '2026-04-10',
+    priority: 'low',
+    status: 'pending',
+    blocker: '',
+    files: [],
+    notes: '包含公司文化、流程规范、工具使用说明',
+    project: null,
+    created_at: '2026-03-24',
+  },
+];
+
+async function seedOldDashboardDefaults(req, res) {
+  const expectedToken = env('ADMIN_SEED_TOKEN') || BOSS_CHAT_ID;
+  const actualToken = req.headers['x-seed-token'];
+  if (expectedToken && actualToken !== expectedToken) return send(res, 403, { error: 'Forbidden' });
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return send(res, 500, { error: 'Missing Supabase config' });
+
+  try {
+    const existing = await sbRequest('GET', 'tasks?select=id,name&limit=1000');
+    if (!Array.isArray(existing)) return send(res, 502, { error: 'Could not read existing tasks from Supabase' });
+
+    const existingIds = new Set(existing.map(task => Number(task.id)).filter(Boolean));
+    const existingNames = new Set(existing.map(task => String(task.name || '').trim()).filter(Boolean));
+    const rows = OLD_DASHBOARD_DEFAULT_TASKS.filter(task => !existingIds.has(task.id) && !existingNames.has(task.name));
+    const inserted = rows.length ? await sbRequest('POST', 'tasks', rows) : [];
+    if (rows.length && !Array.isArray(inserted)) return send(res, 502, { error: 'Could not insert default tasks into Supabase' });
+
+    send(res, 200, {
+      ok: true,
+      source: 'https://singularity0142-code.github.io/task-dashboard/',
+      insertedCount: rows.length,
+      skippedCount: OLD_DASHBOARD_DEFAULT_TASKS.length - rows.length,
+      tasks: inserted,
+      finance: {
+        insertedCount: 0,
+        note: '旧 task-dashboard 代码里没有默认财务记录，只有任务看板默认数据。',
+      },
+    });
+  } catch (error) {
+    send(res, 500, { error: error.message || 'Seed failed' });
+  }
+}
+
 async function getTelegramUpdates(offset) {
   const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${offset}&limit=20&timeout=2`);
   const data = await response.json();
@@ -249,6 +336,7 @@ http.createServer((req, res) => {
   });
   if (pathname === '/api/openai/chat' && req.method === 'POST') return openAIChat(req, res);
   if (pathname === '/api/telegram/send' && req.method === 'POST') return telegramSend(req, res);
+  if (pathname === '/api/admin/seed-defaults' && req.method === 'POST') return seedOldDashboardDefaults(req, res);
   serveStatic(req, res);
 }).listen(port, () => {
   console.log(`Longxiaowang dashboard running at http://localhost:${port}/`);
