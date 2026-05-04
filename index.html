@@ -676,7 +676,7 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;backgr
 <script type="text/babel">
 const {useState,useEffect,useRef}=React;
 const CFG={
-  API_BASE_URL: window.location.hostname.endsWith('github.io')?'https://longxiaowang-dashboard.onrender.com':window.location.origin,
+  API_BASE_URL: 'https://longxiaowang-dashboard.onrender.com',
   SUPABASE_URL: 'https://nkkbvhtmlooverkhyqsa.supabase.co',
   SUPABASE_ANON_KEY: ['eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ','SIsInJlZiI6Im5ra2J2aHRtbG9vdmVya2h5cXNhIiwicm9sZSI6ImFub24','iLCJpYXQiOjE3NzU2OTM1NTksImV4cCI6MjA5MTI2OTU1OX0.7oRpImggZ','HpvusrS6kJKWN6cv12hYG4NqxUFCIZDCIs'].join(''),
   ...(window.QD_CONFIG||{})
@@ -690,8 +690,8 @@ async function openAIText(system,user,maxTokens=500){
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({model:OPENAI_MODEL,system,user,maxTokens})
   });
-  const d=await res.json();
-  if(!res.ok) throw new Error(d.error||d.error?.message||'OpenAI调用失败');
+  const d=await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(d.error?.message||d.error||'AI服务暂时不可用');
   return (d.text||'').trim();
 }
 function getPT(name){const m=(window.__ptMap||{})[name];return m!=null?m:0;}
@@ -1434,7 +1434,16 @@ function VoiceFloat({tasks}){
   const VC_MEMBERS=CFG.MEMBER_CHAT_IDS||{};
   const qSend=(chatId,text)=>fetch(API_BASE_URL+'/api/telegram/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text,parse_mode:'Markdown'})});
 
-  const onErr=()=>{stopBars();setPhase('idle');setStatus('出错，请重试');setTimeout(()=>setStatus('点击说话 · 可下达任务'),3000);};
+  const onErr=err=>{
+    console.error('[语音助手错误]',err);
+    stopBars();setPhase('idle');
+    const msg=String(err?.message||err||'出错，请重试');
+    const friendly=/api key|OpenAI|AI服务|Incorrect/i.test(msg)?'AI服务连接失败'
+      :/Failed to fetch|network/i.test(msg)?'网络连接失败'
+      :'出错，请重试';
+    setStatus(friendly);
+    setTimeout(()=>setStatus('点击说话 · 可下达任务'),4000);
+  };
   const speechApi=()=>window.SpeechRecognition||window.webkitSpeechRecognition||null;
   const collectTranscript=ev=>Array.from(ev.results).map(r=>r[0]?.transcript||'').join('').trim();
   const needsMoreSpeech=t=>/(然后|还有|另外|再加|接着|等一下|等等|这个|那个|嗯|呃|就是|同时|并且|还有一个)$/.test((t||'').trim());
