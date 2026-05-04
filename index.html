@@ -1260,6 +1260,11 @@ function VoiceFloat({tasks}){
   const [pendingTask,setPendingTask]=useState(null); // 等待老板补全/确认的任务单
   const pendingTaskRef=useRef(null); // ref版，供recognition闭包访问
   const recogRef=useRef(null);
+  const recorderRef=useRef(null);
+  const recorderChunksRef=useRef([]);
+  const mediaStreamRef=useRef(null);
+  const audioCtxRef=useRef(null);
+  const analyserTimerRef=useRef(null);
   const barTimerRef=useRef(null);
   const voiceTapRef=useRef(0);
   const recStartedAtRef=useRef(0);
@@ -1286,12 +1291,19 @@ function VoiceFloat({tasks}){
   const stopBars=()=>{clearInterval(barTimerRef.current);barTimerRef.current=null;setBars([3,5,3,5,3]);};
   const safeStopRec=(mode='abort')=>{
     clearTimeout(silenceSubmitTimerRef.current);
+    clearInterval(analyserTimerRef.current);
     pendingSpeechRef.current=false;
     submittingSpeechRef.current=false;
     ignoreEndRef.current=true;
     listenSeqRef.current+=1;
     const r=recogRef.current;
     recogRef.current=null;
+    const mr=recorderRef.current;
+    recorderRef.current=null;
+    const stream=mediaStreamRef.current;
+    mediaStreamRef.current=null;
+    const ctx=audioCtxRef.current;
+    audioCtxRef.current=null;
     isRecRef.current=false;
     pickerListenRef.current=false;
     if(r){
@@ -1300,6 +1312,15 @@ function VoiceFloat({tasks}){
         else if(r.abort) r.abort();
         else if(r.stop) r.stop();
       }catch(e){}
+    }
+    if(mr&&mr.state!=='inactive'){
+      try{mr.stop();}catch(e){}
+    }
+    if(stream){
+      try{stream.getTracks().forEach(t=>t.stop());}catch(e){}
+    }
+    if(ctx){
+      try{ctx.close();}catch(e){}
     }
     setTimeout(()=>{ignoreEndRef.current=false;},180);
   };
@@ -1486,8 +1507,31 @@ function VoiceFloat({tasks}){
     setStatus(friendly);
     setTimeout(()=>setStatus('点击说话 · 可下达任务'),4000);
   };
-  const speechApi=()=>window.SpeechRecognition||window.webkitSpeechRecognition||null;
-  const collectTranscript=ev=>Array.from(ev.results).map(r=>r[0]?.transcript||'').join('').trim();
+  const pickAudioMime=()=>{
+    const types=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/wav'];
+    return types.find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t))||'';
+  };
+  const transcribeAudio=async blob=>{
+    if(!blob||blob.size<800) throw new Error('没有录到有效声音');
+    const res=await fetch(API_BASE_URL+'/api/openai/transcribe',{
+      method:'POST',
+      headers:{'Content-Type':blob.type||'audio/webm'},
+      body:blob
+    });
+    const d=await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(d.error||'语音转文字失败');
+    const text=(d.text||'').trim();
+    if(!text) throw new Error('没有识别到文字');
+    return text;
+  };
+  const stopActiveRecording=()=>{
+    clearInterval(analyserTimerRef.current);
+    const mr=recorderRef.current;
+    if(mr&&mr.state==='recording'){
+      try{mr.requestData&&mr.requestData();}catch(e){}
+      try{mr.stop();}catch(e){}
+    }
+  };
   const needsMoreSpeech=t=>/(然后|还有|另外|再加|接着|等一下|等等|这个|那个|嗯|呃|就是|同时|并且|还有一个)$/.test((t||'').trim());
   const submitAfterSilence=(text,handler,wait=2400)=>{
     clearTimeout(silenceSubmitTimerRef.current);
@@ -1508,6 +1552,86 @@ function VoiceFloat({tasks}){
       handler(text.trim());
       setTimeout(()=>{ignoreEndRef.current=false;},180);
     },delay);
+  };
+
+  const startAudioListen=async({status,onText,silenceMs=1900,maxMs=26000,minMs=900})=>{
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){
+      setStatus('当前浏览器不支持录音，请用Chrome打开');
+      setTimeout(()=>setStatus('点击说话 · 可下达任务'),4000);
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const seq=beginRec();
+    latestSpeechRef.current='';
+    speechHandlerRef.current=onText;
+    setPhase('rec');
+    setStatus('正在打开麦克风...');
+    startBars();
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({
+        audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}
+      });
+      if(seq!==listenSeqRef.current){stream.getTracks().forEach(t=>t.stop());return;}
+      mediaStreamRef.current=stream;
+      const mime=pickAudioMime();
+      const rec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);
+      recorderRef.current=rec;
+      recorderChunksRef.current=[];
+      const ctx=new (window.AudioContext||window.webkitAudioContext)();
+      audioCtxRef.current=ctx;
+      const src=ctx.createMediaStreamSource(stream);
+      const analyser=ctx.createAnalyser();
+      analyser.fftSize=512;
+      src.connect(analyser);
+      const samples=new Uint8Array(analyser.fftSize);
+      let heard=false,lastVoice=Date.now();
+      const started=Date.now();
+      const finish=()=>{if(seq===listenSeqRef.current) stopActiveRecording();};
+      rec.ondataavailable=e=>{if(e.data&&e.data.size>0) recorderChunksRef.current.push(e.data);};
+      rec.onerror=e=>{if(seq!==listenSeqRef.current)return;onErr(e.error||new Error('录音失败'));};
+      rec.onstop=async()=>{
+        if(seq!==listenSeqRef.current||ignoreEndRef.current) return;
+        clearInterval(analyserTimerRef.current);
+        isRecRef.current=false;
+        recorderRef.current=null;
+        const tracks=mediaStreamRef.current;
+        mediaStreamRef.current=null;
+        if(tracks) tracks.getTracks().forEach(t=>t.stop());
+        const audioCtx=audioCtxRef.current;
+        audioCtxRef.current=null;
+        if(audioCtx) audioCtx.close().catch(()=>{});
+        const blob=new Blob(recorderChunksRef.current,{type:rec.mimeType||'audio/webm'});
+        recorderChunksRef.current=[];
+        stopBars();setPhase('proc');setStatus('正在转文字...');
+        try{
+          const text=await transcribeAudio(blob);
+          latestSpeechRef.current=text;
+          gotResultRef.current=true;
+          setStatus('"'+text+'"');
+          onText(text);
+        }catch(err){onErr(err);}
+      };
+      rec.start(250);
+      setStatus(status||'我在听，说完会自动发送...');
+      analyserTimerRef.current=setInterval(()=>{
+        if(seq!==listenSeqRef.current){clearInterval(analyserTimerRef.current);return;}
+        analyser.getByteTimeDomainData(samples);
+        let sum=0;
+        for(let i=0;i<samples.length;i++){const v=(samples[i]-128)/128;sum+=v*v;}
+        const rms=Math.sqrt(sum/samples.length);
+        const now=Date.now();
+        if(rms>0.035){heard=true;lastVoice=now;}
+        if(now-started>maxMs){finish();return;}
+        if(heard&&now-lastVoice>silenceMs&&now-started>minMs) finish();
+      },180);
+    }catch(err){
+      if(seq!==listenSeqRef.current) return;
+      isRecRef.current=false;
+      stopBars();setPhase('idle');
+      const msg=String(err?.name||err?.message||err);
+      setStatus(/NotAllowed|Permission|denied/i.test(msg)?'请允许麦克风权限':'麦克风打开失败');
+      setTimeout(()=>setStatus('点击说话 · 可下达任务'),4000);
+    }
   };
 
   const speak=(ans,noAutoResume=false)=>{
@@ -1567,20 +1691,7 @@ function VoiceFloat({tasks}){
 
   // 主监听会话（可被 speak 回调 or handleClick 调用）
   const startMainListen=(isFirst=true)=>{
-    const SR=speechApi();
-    if(!SR){setStatus('当前浏览器不支持语音识别，请用Chrome打开');setTimeout(()=>setStatus('点击说话 · 可下达任务'),4000);return;}
-    window.speechSynthesis.cancel();
-    const seq=beginRec();
-    const r=new SR();
-    r.lang='zh-CN';r.continuous=true;r.interimResults=true;r.maxAlternatives=1;
-    recogRef.current=r;
-    latestSpeechRef.current='';
-    speechHandlerRef.current=null;
-    setPhase('rec');
-    setStatus('正在启动语音...');
-    startBars();
     if(isFirst){beepFn(1047,.05,0);beepFn(1319,.05,.1);}
-
     const handleMainTranscript=transcript=>{
       quickRetryRef.current=0;
       gotResultRef.current=true;
@@ -1593,53 +1704,12 @@ function VoiceFloat({tasks}){
         askAI(transcript).then(ans=>speak(ans)).catch(onErr);
       }
     };
-    r.onresult=ev=>{
-      if(isOldRec(seq,r)) return;
-      const transcript=collectTranscript(ev);
-      gotResultRef.current=!!transcript;
-      setStatus(`"${transcript}"`);
-      submitAfterSilence(transcript,handleMainTranscript,2800);
-    };
-
-    r.onerror=ev=>{
-      if(isOldRec(seq,r)||ignoreEndRef.current||ev.error==='aborted') return;
-      isRecRef.current=false;
-      stopBars();setPhase('idle');
-      const msg={'no-speech':'没检测到声音，再试试','audio-capture':'麦克风无法访问','not-allowed':'请允许麦克风权限','network':'网络错误'}[ev.error]||('识别错误:'+ev.error);
-      setStatus(msg);setTimeout(()=>setStatus('点击说话 · 可下达任务'),3000);
-    };
-    r.onstart=()=>{
-      if(isOldRec(seq,r)) return;
-      setStatus(isFirst?'说吧，说完自动发送...':'继续说...');
-    };
-    r.onend=()=>{
-      if(isOldRec(seq,r)||ignoreEndRef.current) return;
-      isRecRef.current=false;
-      if(!pendingSpeechRef.current) clearTimeout(silenceSubmitTimerRef.current);
-      if(submittingSpeechRef.current){submittingSpeechRef.current=false;return;}
-      if(!gotResultRef.current){
-        const tooFast=Date.now()-recStartedAtRef.current<1200;
-        if(tooFast&&quickRetryRef.current<1){
-          quickRetryRef.current+=1;
-          stopBars();setPhase('idle');setStatus('语音刚断开，马上重试一次...');
-          setTimeout(()=>startMainListen(false),350);
-          return;
-        }
-        quickRetryRef.current=0;
-        stopBars();setPhase('idle');
-        setStatus(tooFast?'麦克风没有保持连接，点我再试一次':'点击说话 · 可下达任务');
-        if(tooFast) setTimeout(()=>setStatus('点击说话 · 可下达任务'),4500);
-      }
-    };
-    try{
-      r.start();
-    }catch(err){
-      if(isOldRec(seq,r)) return;
-      isRecRef.current=false;
-      stopBars();setPhase('idle');
-      setStatus('语音启动失败：'+(err&&err.message?err.message:'请检查麦克风权限'));
-      setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);
-    }
+    startAudioListen({
+      status:isFirst?'说吧，说完自动发送...':'继续说...',
+      onText:handleMainTranscript,
+      silenceMs:2200,
+      maxMs:30000
+    });
   };
 
   const handleClick=e=>{
@@ -1667,24 +1737,8 @@ function VoiceFloat({tasks}){
     }
     if(phase==='rec'||isRecRef.current){
       clearTimeout(silenceSubmitTimerRef.current);
-      const text=latestSpeechRef.current;
-      const handler=speechHandlerRef.current;
-      if(text&&handler){
-        pendingSpeechRef.current=false;
-        submittingSpeechRef.current=true;
-        ignoreEndRef.current=true;
-        const r=recogRef.current;
-        recogRef.current=null;
-        isRecRef.current=false;
-        if(r){try{r.stop();}catch(e){}}
-        stopBars();setPhase('proc');
-        handler(text);
-        setTimeout(()=>{ignoreEndRef.current=false;},180);
-      }else{
-        safeStopRec('stop');
-        stopBars();setPhase('idle');setStatus('已暂停，点我继续说。');
-        setTimeout(()=>setStatus('点击说话 · 可下达任务'),2500);
-      }
+      if(recorderRef.current){setStatus('正在转文字...');stopActiveRecording();}
+      else {safeStopRec('stop');stopBars();setPhase('idle');setStatus('已暂停，点我继续说。');setTimeout(()=>setStatus('点击说话 · 可下达任务'),2500);}
       return;
     }
     const pt=pendingTaskRef.current;
@@ -1699,17 +1753,7 @@ function VoiceFloat({tasks}){
 
   // 任务单补全/确认监听：逐项问清负责人、交付时间、交付结果、重要程度
   const startTaskReviewListen=(focus,{auto=false}={})=>{
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR||!pendingTaskRef.current) return;
-    const seq=beginRec();
-    pickerListenRef.current=true;
-    const r=new SR();
-    r.lang='zh-CN';r.continuous=true;r.interimResults=true;r.maxAlternatives=3;
-    recogRef.current=r;
-    latestSpeechRef.current='';
-    speechHandlerRef.current=null;
-    setPhase('rec');setStatus(focus==='confirm'?'我在听，您可修改或确认':'我在听，请补充');
-    startBars();
+    if(!pendingTaskRef.current) return;
     const handleReviewAnswer=answer=>{
       if(Date.now()<suppressListenUntilRef.current) return;
       setStatus(answer?`"${answer}"`:'我在听');
@@ -1739,89 +1783,29 @@ function VoiceFloat({tasks}){
       }
       mergeTaskAnswerAI(draft,answer,focus).then(nextDraft=>askTaskReview(nextDraft,{brief:focus!=='confirm',changedFrom:focus==='confirm'?draft:null})).catch(onErr);
     };
-    r.onresult=ev=>{
-      if(isOldRec(seq,r)) return;
-      const answer=collectTranscript(ev);
-      gotResultRef.current=!!answer;
-      if(Date.now()<suppressListenUntilRef.current) return;
-      setStatus(answer?`"${answer}"`:'我在听');
-      submitAfterSilence(answer,handleReviewAnswer,2600);
-    };
-    r.onerror=ev=>{
-      if(isOldRec(seq,r)||ignoreEndRef.current||ev.error==='aborted') return;
-      clearTimeout(silenceSubmitTimerRef.current);
-      isRecRef.current=false;
-      pickerListenRef.current=false;stopBars();setPhase('idle');
-      const msg=ev.error==='no-speech'?'我先等着，不催您。':ev.error==='not-allowed'?'请允许麦克风权限':'没听清，点我再说。';
-      setStatus(msg);
-      setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);
-    };
-    r.onend=()=>{
-      if(isOldRec(seq,r)||ignoreEndRef.current) return;
-      isRecRef.current=false;
-      if(!pendingSpeechRef.current) clearTimeout(silenceSubmitTimerRef.current);
-      if(submittingSpeechRef.current){submittingSpeechRef.current=false;return;}
-      const tooFast=Date.now()-recStartedAtRef.current<1200;
-      if(tooFast&&quickRetryRef.current<1){
-        quickRetryRef.current+=1;
-        pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音刚断开，马上重试一次...');
-        setTimeout(()=>startTaskReviewListen(focus,{auto:true}),350);
-        return;
-      }
-      quickRetryRef.current=0;
-      if(pickerListenRef.current){
-        pickerListenRef.current=false;stopBars();setPhase('idle');
-        setStatus(auto?'我先等着，不催您。':'我先等着，想好了点我继续。');
-        setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);
-      }
-    };
-    try{r.start();}catch(err){if(isOldRec(seq,r))return;isRecRef.current=false;pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音启动失败，请再点一次。');}
+    startAudioListen({
+      status:focus==='confirm'?'我在听，您可修改或确认':'我在听，请补充',
+      onText:handleReviewAnswer,
+      silenceMs:auto?2600:2200,
+      maxMs:30000
+    });
   };
 
   // 语音监听项目选择（picker出现后自动调用）
   const startPickerListen=()=>{
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR||!pendingTaskRef.current) return;
-    const seq=beginRec();
-    pickerListenRef.current=true;
-    const r=new SR();
-    r.lang='zh-CN';r.continuous=false;r.interimResults=false;r.maxAlternatives=3;
-    recogRef.current=r;
-    setPhase('rec');setStatus('请说一般、重要或紧急...');startBars();
-    r.onresult=ev=>{
-      if(isOldRec(seq,r)) return;
-      gotResultRef.current=true;
-      pickerListenRef.current=false;
-      stopBars();setPhase('proc');
-      const alts=Array.from(ev.results[0]).map(a=>a.transcript);
-      const t=alts.join(' ');
+    if(!pendingTaskRef.current) return;
+    startAudioListen({
+      status:'请说一般、重要或紧急...',
+      silenceMs:1500,
+      maxMs:10000,
+      onText:t=>{
       let proj=null;
       if(/紧急|急|马上|立刻|赶快|最高/.test(t)) proj='紧急';
       else if(/重要|重点|关键|高/.test(t)) proj='重要';
       else proj='一般';
       confirmProject(proj);
-    };
-    r.onerror=ev=>{
-      if(isOldRec(seq,r)||ignoreEndRef.current||ev.error==='aborted') return;
-      isRecRef.current=false;
-      pickerListenRef.current=false;stopBars();setPhase('idle');
-      setStatus(ev.error==='no-speech'?'先不急，点我再选项目。':'没听清项目，点我再说。');
-      setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);
-    };
-    r.onend=()=>{
-      if(isOldRec(seq,r)||ignoreEndRef.current) return;
-      isRecRef.current=false;
-      const tooFast=Date.now()-recStartedAtRef.current<1200;
-      if(tooFast&&quickRetryRef.current<1){
-        quickRetryRef.current+=1;
-        pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音刚断开，马上重试一次...');
-        setTimeout(()=>startPickerListen(),350);
-        return;
       }
-      quickRetryRef.current=0;
-      if(pickerListenRef.current){pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('先不急，点我再选项目。');setTimeout(()=>setStatus('点击说话 · 可下达任务'),5000);}
-    };
-    try{r.start();}catch(err){if(isOldRec(seq,r))return;isRecRef.current=false;pickerListenRef.current=false;stopBars();setPhase('idle');setStatus('语音启动失败，请再点一次。');}
+    });
   };
 
   // 老板选了项目后，执行存档 + 通知

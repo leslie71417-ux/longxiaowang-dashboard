@@ -60,6 +60,7 @@ const memberIds = {
 
 const OPENAI_API_KEY = env('OPENAI_API_KEY');
 const OPENAI_MODEL = env('OPENAI_MODEL', 'gpt-4.1-mini');
+const OPENAI_TRANSCRIBE_MODEL = env('OPENAI_TRANSCRIBE_MODEL', 'whisper-1');
 const TELEGRAM_BOT_TOKEN = env('TELEGRAM_BOT_TOKEN');
 const BOSS_CHAT_ID = env('BOSS_CHAT_ID');
 const SUPABASE_URL = env('SUPABASE_URL');
@@ -95,6 +96,24 @@ function readBody(req) {
   });
 }
 
+function readBodyBuffer(req, maxBytes = 25_000_000) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error('Audio body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 async function openAIChat(req, res) {
   if (!OPENAI_API_KEY) return send(res, 500, { error: 'Missing OPENAI_API_KEY' });
   try {
@@ -120,6 +139,30 @@ async function openAIChat(req, res) {
     send(res, 200, { text: data.choices?.[0]?.message?.content || '' });
   } catch (error) {
     send(res, 500, { error: error.message || 'OpenAI request failed' });
+  }
+}
+
+async function openAITranscribe(req, res) {
+  if (!OPENAI_API_KEY) return send(res, 500, { error: 'Missing OPENAI_API_KEY' });
+  try {
+    const audio = await readBodyBuffer(req);
+    if (!audio.length) return send(res, 400, { error: 'Missing audio body' });
+    const contentType = String(req.headers['content-type'] || 'audio/webm').split(';')[0] || 'audio/webm';
+    const ext = contentType.includes('mp4') ? 'mp4' : contentType.includes('mpeg') ? 'mp3' : contentType.includes('wav') ? 'wav' : 'webm';
+    const form = new FormData();
+    form.append('model', OPENAI_TRANSCRIBE_MODEL);
+    form.append('language', 'zh');
+    form.append('file', new Blob([audio], { type: contentType }), `speech.${ext}`);
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+      body: form,
+    });
+    const data = await response.json();
+    if (!response.ok) return send(res, response.status, { error: data.error?.message || 'Transcription failed' });
+    send(res, 200, { text: data.text || '' });
+  } catch (error) {
+    send(res, 500, { error: error.message || 'Transcription failed' });
   }
 }
 
@@ -335,6 +378,7 @@ http.createServer((req, res) => {
     supabase: !!(SUPABASE_URL && SUPABASE_ANON_KEY),
   });
   if (pathname === '/api/openai/chat' && req.method === 'POST') return openAIChat(req, res);
+  if (pathname === '/api/openai/transcribe' && req.method === 'POST') return openAITranscribe(req, res);
   if (pathname === '/api/telegram/send' && req.method === 'POST') return telegramSend(req, res);
   if (pathname === '/api/admin/seed-defaults' && req.method === 'POST') return seedOldDashboardDefaults(req, res);
   serveStatic(req, res);
