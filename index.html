@@ -360,7 +360,12 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;backgr
 .proj-picker-task{font-size:.72rem;color:#6B7280;margin-bottom:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .proj-picker-btns{display:flex;gap:8px;flex-wrap:wrap;}
 .proj-picker-btn{flex:1;min-width:72px;padding:8px 6px;border-radius:10px;border:1.5px solid #E5E7EB;background:#F9FAFB;font-size:.76rem;font-weight:700;color:#374151;cursor:pointer;text-align:center;transition:all .15s;}
-.proj-picker-btn:hover{background:#ECFDF5;border-color:#22C55E;color:#15803D;}
+.proj-picker-btn.level-normal{background:#F0FDF4;border-color:#86EFAC;color:#166534;}
+.proj-picker-btn.level-urgent{background:#FEFCE8;border-color:#FACC15;color:#854D0E;}
+.proj-picker-btn.level-critical{background:#FEF2F2;border-color:#FCA5A5;color:#B91C1C;}
+.proj-picker-btn.level-normal:hover{background:#DCFCE7;border-color:#22C55E;color:#14532D;}
+.proj-picker-btn.level-urgent:hover{background:#FEF3C7;border-color:#EAB308;color:#713F12;}
+.proj-picker-btn.level-critical:hover{background:#FEE2E2;border-color:#EF4444;color:#991B1B;}
 .proj-picker-btn.other{background:#F9FAFB;}
 /* ── Voice Float (bottom center) ── */
 @keyframes vfPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.45),0 4px 20px rgba(239,68,68,.35)}70%{box-shadow:0 0 0 18px rgba(239,68,68,0),0 4px 20px rgba(239,68,68,.3)}}
@@ -701,7 +706,11 @@ const SURL=CFG.SUPABASE_URL||'';
 const SKEY=CFG.SUPABASE_ANON_KEY||'';
 const HAS_SUPABASE=!!(SURL&&SKEY&&window.supabase);
 const PROJECTS=['w','理享招生项目'];
-const TASK_LEVELS=['一般','重要','紧急'];
+const TASK_LEVELS=[
+  {label:'一般',cls:'level-normal'},
+  {label:'紧急',cls:'level-urgent'},
+  {label:'很紧急',cls:'level-critical'}
+];
 const PROJECT_MEMBERS={
   'w':[],
   '理享招生项目':[
@@ -1776,7 +1785,7 @@ function VoiceFloat({tasks}){
         const next={parsed:draft,mode:'project',focus:'project'};
         pendingTaskRef.current=next;
         setPendingTask(next);
-        const prompt='收到。请选择任务级别：一般、重要、紧急。';
+        const prompt='收到。请选择任务级别：一般、紧急、很紧急。';
         quickRetryRef.current=0;
         speakThen(prompt,()=>startPickerListen());
         return;
@@ -1795,13 +1804,13 @@ function VoiceFloat({tasks}){
   const startPickerListen=()=>{
     if(!pendingTaskRef.current) return;
     startAudioListen({
-      status:'请说一般、重要或紧急...',
+      status:'请说一般、紧急或很紧急...',
       silenceMs:1500,
       maxMs:10000,
       onText:t=>{
       let proj=null;
-      if(/紧急|急|马上|立刻|赶快|最高/.test(t)) proj='紧急';
-      else if(/重要|重点|关键|高/.test(t)) proj='重要';
+      if(/很紧急|特别急|非常急|十万火急|马上|立刻|最高/.test(t)) proj='很紧急';
+      else if(/紧急|急|赶快|重要|重点|关键|高/.test(t)) proj='紧急';
       else proj='一般';
       confirmProject(proj);
       }
@@ -1907,7 +1916,7 @@ function VoiceFloat({tasks}){
           {pendingTask.mode==='project'?(
             <div className="proj-picker-btns">
               {TASK_LEVELS.map(function(p){return(
-                <button key={p} className="proj-picker-btn" onClick={function(){confirmProject(p);}}>{p}</button>
+                <button key={p.label} className={'proj-picker-btn '+p.cls} onClick={function(){confirmProject(p.label);}}>{p.label}</button>
               );})}
             </div>
           ):(
