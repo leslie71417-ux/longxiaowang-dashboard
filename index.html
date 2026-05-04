@@ -359,7 +359,9 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;backgr
 .proj-picker-title{font-size:.78rem;font-weight:700;color:#111827;margin-bottom:4px;}
 .proj-picker-task{font-size:.72rem;color:#6B7280;margin-bottom:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .proj-picker-btns{display:flex;gap:8px;flex-wrap:wrap;}
-.proj-picker-btn{flex:1;min-width:72px;padding:8px 6px;border-radius:10px;border:1.5px solid #E5E7EB;background:#F9FAFB;font-size:.76rem;font-weight:700;color:#374151;cursor:pointer;text-align:center;transition:all .15s;}
+.proj-picker-btn{flex:1;min-width:72px;padding:8px 6px;border-radius:10px;border:1.5px solid #E5E7EB;background:#F9FAFB;font-size:.76rem;font-weight:700;color:#374151;cursor:pointer;text-align:center;transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:3px;line-height:1.15;}
+.proj-picker-emoji{font-size:1.34rem;line-height:1;}
+.proj-picker-label{font-size:.73rem;}
 .proj-picker-btn.level-normal{background:#F0FDF4;border-color:#86EFAC;color:#166534;}
 .proj-picker-btn.level-urgent{background:#FEFCE8;border-color:#FACC15;color:#854D0E;}
 .proj-picker-btn.level-critical{background:#FEF2F2;border-color:#FCA5A5;color:#B91C1C;}
@@ -707,9 +709,9 @@ const SKEY=CFG.SUPABASE_ANON_KEY||'';
 const HAS_SUPABASE=!!(SURL&&SKEY&&window.supabase);
 const PROJECTS=['w','理享招生项目'];
 const TASK_LEVELS=[
-  {label:'一般',cls:'level-normal'},
-  {label:'紧急',cls:'level-urgent'},
-  {label:'很紧急',cls:'level-critical'}
+  {label:'一般',cls:'level-normal',emoji:'😌'},
+  {label:'紧急',cls:'level-urgent',emoji:'😟'},
+  {label:'很紧急',cls:'level-critical',emoji:'😱'}
 ];
 const PROJECT_MEMBERS={
   'w':[],
@@ -1916,7 +1918,10 @@ function VoiceFloat({tasks}){
           {pendingTask.mode==='project'?(
             <div className="proj-picker-btns">
               {TASK_LEVELS.map(function(p){return(
-                <button key={p.label} className={'proj-picker-btn '+p.cls} onClick={function(){confirmProject(p.label);}}>{p.label}</button>
+                <button key={p.label} className={'proj-picker-btn '+p.cls} onClick={function(){confirmProject(p.label);}}>
+                  <span className="proj-picker-emoji">{p.emoji}</span>
+                  <span className="proj-picker-label">{p.label}</span>
+                </button>
               );})}
             </div>
           ):(
